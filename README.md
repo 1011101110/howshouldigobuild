@@ -1,121 +1,159 @@
 # HowShouldIGo 🗺️
 
-**Smart transportation recommendations based on real-time weather, distance, and your personal preferences.**
+**Smart transportation recommendations based on real-time weather, distance, and your preferences.**
 
-Enter your origin and destination, and HowShouldIGo scores all 4 transport modes (walk, bike, transit, drive) from 0–100 and recommends the best option.
+Enter origin → destination, set your preference slider, and the app scores Walk / Bike / Transit / Drive 0–100 with a clear recommendation banner and comparison cards.
 
 ---
 
 ## Features
 
-- **Location Input** — Type addresses with Google Places autocomplete, or tap 📍 to auto-detect your current location
-- **Preference Slider** — Bias the algorithm toward your preferred mode (Walk ↔ Bike ↔ Transit ↔ Drive)
-- **Live Weather** — Fetches current conditions (temp, rain/snow, wind) from Open-Meteo (free, no key required)
-- **Route Calculation** — Google Directions API for all 4 modes; estimated time + distance for each
-- **Dark Map** — Full-width Google Maps with the winning route in bold blue and others in faded gray
-- **Score Cards** — Visual 0–100 score for each mode with reasons (distance, weather factors, preference bias)
-- **Dark mode** — Default dark UI, mobile responsive
+| Feature | Detail |
+|---------|--------|
+| 📍 Location input | Google Places autocomplete + GPS auto-detect |
+| 🌤️ Live weather | Open-Meteo (free, no key) — temp, rain/snow, wind |
+| 🗺️ Route display | Google Maps with winner route in bold blue, others faded |
+| 🏆 Recommendation banner | Large colored panel — "Bike. 2.3 mi, 72°F and sunny, 12 min." |
+| 📊 4 comparison cards | SVG icon, time, distance, weather dot (🟢🟡🔴), score 0-100 |
+| 🎛️ Preference slider | Walk ↔ Bike ↔ Transit ↔ Drive — adds up to ±25 pts |
+| 📱 Mobile responsive | Horizontal cards on desktop, 2×2 grid on tablet, stacked mobile |
+
+---
 
 ## Scoring Algorithm
 
-Each mode starts at 50 and is adjusted by:
-- **Distance** — Walking penalized >1.5 mi; biking penalized >8 mi; driving rewarded for long distances
-- **Weather** — Rain/snow penalize walk/bike by 25–30 pts; extremes (<35°F or >95°F) penalize 20 pts; perfect weather (50–80°F, clear, calm) boosts walk/bike; wind >20 mph penalizes biking
-- **Travel time vs driving** — Modes much slower than driving lose points
-- **Slider bias** — Modes near your slider position get a boost (max +18 pts)
+Each mode starts at 50, adjusted by:
+
+- **Distance** — Walking >3 mi: −40 pts; Biking >15 mi: −38 pts; Short drives: −28 pts
+- **Weather** — Rain/snow: −26–32 for walk/bike; extremes (<35°F / >90°F): −14–25 pts
+- **Wind** — >20 mph: −13 pts for bike; >30 mph: −22 pts
+- **Transit time penalty** — Transit 3×+ slower than driving: −30 pts; 2×+ slower: −14 pts
+- **Preference slider** — Up to +25 pts for preferred mode, down to −25 pts away
+- **Weather suitability dot** — 🟢 Green / 🟡 Yellow / 🔴 Red per card
 
 ---
 
-## Setup
-
-### 1. Clone & install
+## Quick Start (Local Dev)
 
 ```bash
-git clone <repo>
-cd howshouldigobuild
+# 1. Install
+cd /tmp/howshouldigobuild
 npm install
-```
 
-### 2. Get a Google Maps API Key
-
-1. Go to [console.cloud.google.com](https://console.cloud.google.com/google/maps-apis)
-2. Create a project and enable these APIs:
-   - **Maps JavaScript API**
-   - **Directions API**
-   - **Places API**
-   - **Geocoding API**
-3. Create an API key and restrict it to your domain for production
-
-### 3. Configure environment
-
-```bash
+# 2. Configure
 cp .env.example .env.local
-# Edit .env.local and add your key:
-# NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=your_key_here
-```
+# Edit .env.local → add your Google Maps API key
 
-### 4. Run locally
-
-```bash
+# 3. Run
 npm run dev
-# Opens at http://localhost:3000
+# → http://localhost:3000
 ```
 
-### 5. Build for production
+### Required Google Maps APIs
 
-```bash
-npm run build
-npm start
-```
+Enable at [console.cloud.google.com](https://console.cloud.google.com/google/maps-apis):
+
+- ✅ Maps JavaScript API
+- ✅ Directions API
+- ✅ Places API
+- ✅ Geocoding API
 
 ---
 
-## Deploy to Vercel
+## Deploy to Cloud Run via GitHub Actions
+
+The CI/CD pipeline is already configured in `.github/workflows/deploy.yml`.
+
+### Step 1: Create GCP Service Account
 
 ```bash
-npx vercel --prod
-# Set NEXT_PUBLIC_GOOGLE_MAPS_API_KEY in Vercel project settings
+# Set your project
+export PROJECT_ID=aerial-ceremony-484700-b2
+
+# Create service account
+gcloud iam service-accounts create github-deploy \
+  --project=$PROJECT_ID \
+  --display-name="GitHub Deploy"
+
+# Grant required roles
+for ROLE in roles/run.admin roles/artifactregistry.writer roles/iam.serviceAccountUser; do
+  gcloud projects add-iam-policy-binding $PROJECT_ID \
+    --member="serviceAccount:github-deploy@$PROJECT_ID.iam.gserviceaccount.com" \
+    --role="$ROLE"
+done
+
+# Create key
+gcloud iam service-accounts keys create key.json \
+  --iam-account=github-deploy@$PROJECT_ID.iam.gserviceaccount.com
 ```
 
-## Deploy to Cloud Run
+### Step 2: Create Artifact Registry repo (if not exists)
 
 ```bash
-docker build -t howshouldigobuild .
-docker run -p 3000:3000 -e NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=your_key howshouldigobuild
+gcloud artifacts repositories create docker-images \
+  --repository-format=docker \
+  --location=us-central1 \
+  --project=$PROJECT_ID
 ```
 
----
+### Step 3: Add GitHub Secrets
 
-## Tech Stack
+Go to **GitHub → repo → Settings → Secrets and variables → Actions** and add:
 
-| Layer | Tech |
-|-------|------|
-| Framework | Next.js 16 (App Router) |
-| Language | TypeScript |
-| Styling | Tailwind CSS |
-| Maps | Google Maps JavaScript API |
-| Routes | Google Directions API |
-| Autocomplete | Google Places API |
-| Weather | Open-Meteo (free, no key) |
-| Deployment | Vercel / Cloud Run |
+| Secret | Value |
+|--------|-------|
+| `GCP_SA_KEY` | Contents of `key.json` (full JSON) |
+| `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | Your Google Maps API key |
+
+### Step 4: Push to main
+
+```bash
+git push origin main
+# → GitHub Actions builds Docker image → pushes to Artifact Registry → deploys to Cloud Run
+# → Live URL shown at end of Actions run
+```
+
+### Manual Deploy (Alternative)
+
+```bash
+gcloud run deploy howshouldigobuild \
+  --source . \
+  --region us-central1 \
+  --project aerial-ceremony-484700-b2 \
+  --allow-unauthenticated \
+  --memory 512Mi \
+  --set-env-vars "NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=your_key_here"
+```
 
 ---
 
 ## Project Structure
 
 ```
-app/
-  page.tsx              # Main app page (client component)
-  layout.tsx            # Root layout + metadata
-  globals.css           # Tailwind + dark mode styles
-  types.ts              # TypeScript interfaces
-  api/
-    weather/route.ts    # Open-Meteo proxy API route
-  components/
-    WeatherDisplay.tsx  # Weather info bar
-    PreferenceSlider.tsx # Walk/Bike/Transit/Drive slider
-    TransportCard.tsx   # Score card per transport mode
-    MapDisplay.tsx      # Google Maps with route polylines
-  utils/
-    scoring.ts          # 0-100 scoring engine
+howshouldigobuild/
+├── app/
+│   ├── page.tsx                    # Main SPA — fixed top bar, map, cards
+│   ├── layout.tsx                  # Root layout + metadata
+│   ├── globals.css                 # Light theme + Places autocomplete styles
+│   ├── types.ts                    # TypeScript interfaces
+│   ├── api/weather/route.ts        # Open-Meteo proxy (5-min cache)
+│   ├── utils/scoring.ts            # 0-100 scoring engine
+│   └── components/
+│       ├── icons.tsx               # SVG icons (walk, bike, transit, drive)
+│       ├── WeatherDisplay.tsx      # Temp / rain / wind strip
+│       ├── PreferenceSlider.tsx    # Walk ↔ Bike ↔ Transit ↔ Drive
+│       ├── RecommendationBanner.tsx # Big colored "Bike. 2.3 mi…" banner
+│       ├── TransportCard.tsx       # Score card with dot, bar, reasons
+│       └── MapDisplay.tsx          # Google Maps + route polylines
+├── .github/workflows/deploy.yml   # Cloud Run CI/CD
+├── Dockerfile                      # Multi-stage, non-root, port 8080
+├── .dockerignore
+├── next.config.ts                  # output: standalone (required for Docker)
+└── .env.example
 ```
+
+---
+
+## Tech Stack
+
+Next.js 16 · TypeScript · Tailwind CSS · Google Maps JS API · Open-Meteo · Cloud Run · GitHub Actions
