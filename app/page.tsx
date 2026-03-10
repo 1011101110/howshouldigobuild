@@ -90,6 +90,22 @@ export default function Home() {
     setMapsReady(true);
   }, [fetchWeather]);
 
+  // Listen for Maps API ready event
+  useEffect(() => {
+    const tryInit = () => {
+      if (typeof google !== 'undefined' && google.maps?.places) {
+        initAutocomplete();
+      }
+    };
+    // If already loaded
+    if ((window as unknown as Record<string, unknown>).__mapsReady) {
+      tryInit();
+    }
+    // Listen for future load
+    window.addEventListener('maps-ready', tryInit);
+    return () => window.removeEventListener('maps-ready', tryInit);
+  }, [initAutocomplete]);
+
   const detectLocation = useCallback(() => {
     if (!navigator.geolocation) { setError('Geolocation not available'); return; }
     setLoadingLocation(true);
@@ -161,16 +177,15 @@ export default function Home() {
 
   return (
     <>
-      {/* Maps callback shim — must run before the Maps script */}
-      <Script id="maps-shim" strategy="beforeInteractive">{`window.__initMaps=function(){};`}</Script>
+      {/* Google Maps loader — callback triggers autocomplete init */}
+      <Script
+        id="maps-shim"
+        strategy="beforeInteractive"
+      >{`window.__mapsReady=false;window.__initMaps=function(){window.__mapsReady=true;window.dispatchEvent(new Event('maps-ready'));};`}</Script>
       <Script
         id="google-maps"
         strategy="afterInteractive"
         src={`https://maps.googleapis.com/maps/api/js?key=${API_KEY}&libraries=places&callback=__initMaps`}
-        onLoad={() => {
-          (window as unknown as Record<string, () => void>).__initMaps = initAutocomplete;
-          if (typeof google !== 'undefined' && google.maps?.places) initAutocomplete();
-        }}
       />
 
       <div className="min-h-screen bg-[#f8f9fb] flex flex-col">
