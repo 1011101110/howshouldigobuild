@@ -12,7 +12,7 @@ interface MapDisplayProps {
 }
 
 const WINNER_COLOR = '#2563eb'; // bold blue for selected
-const GHOST_COLOR = '#d1d5db';  // light gray for others
+const GHOST_COLOR = '#9ca3af';  // medium gray for others
 
 export default function MapDisplay({
   origin,
@@ -128,11 +128,19 @@ export default function MapDisplay({
       }
 
       const r = renderers.current[mode]!;
+      // Only show selected route; hide others completely unless user has picked one
+      if (!isSelected && selectedMode) {
+        // Hide non-selected routes entirely — no more blue spaghetti
+        r.setMap(null);
+        return;
+      }
+
+      r.setMap(mapInstance.current);
       r.setOptions({
         polylineOptions: {
           strokeColor: isSelected ? WINNER_COLOR : GHOST_COLOR,
-          strokeOpacity: isSelected ? 0.95 : 0.45,
-          strokeWeight: isSelected ? 7 : 4,
+          strokeOpacity: isSelected ? 0.9 : 0.3,
+          strokeWeight: isSelected ? 6 : 3,
           zIndex: isSelected ? 20 : 1,
           clickable: !isSelected,
         },
@@ -199,16 +207,12 @@ export default function MapDisplay({
   );
 }
 
+// Minimal styling — keep Google Maps' default look, just reduce POI clutter
 const lightMapStyles: google.maps.MapTypeStyle[] = [
-  { featureType: 'poi', stylers: [{ visibility: 'off' }] },
-  { featureType: 'poi.park', stylers: [{ visibility: 'on' }] },
-  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#e8f5e9' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#dbeafe' }] },
-  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#fde68a' }] },
-  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#fbbf24' }] },
-  { featureType: 'road.arterial', elementType: 'geometry', stylers: [{ color: '#fff' }] },
-  { featureType: 'road.local', elementType: 'geometry', stylers: [{ color: '#fff' }] },
-  { featureType: 'transit.station', stylers: [{ visibility: 'simplified' }] },
-  { featureType: 'landscape', elementType: 'geometry', stylers: [{ color: '#f3f4f6' }] },
-  { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#d1d5db' }] },
+  { featureType: 'poi.business', stylers: [{ visibility: 'off' }] },
+  { featureType: 'poi.government', stylers: [{ visibility: 'off' }] },
+  { featureType: 'poi.medical', stylers: [{ visibility: 'off' }] },
+  { featureType: 'poi.school', stylers: [{ visibility: 'off' }] },
+  { featureType: 'poi.sports_complex', stylers: [{ visibility: 'off' }] },
+  { featureType: 'transit.station.bus', stylers: [{ visibility: 'off' }] },
 ];
