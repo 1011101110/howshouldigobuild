@@ -1,65 +1,306 @@
-import Image from "next/image";
+'use client';
+
+import { useState, useEffect, useRef, useCallback } from 'react';
+import Script from 'next/script';
+import dynamic from 'next/dynamic';
+import { TransportMode, WeatherData, RouteResult, TransportScore, LatLng } from './types';
+import { scoreTransportModes } from './utils/scoring';
+import WeatherDisplay from './components/WeatherDisplay';
+import PreferenceSlider from './components/PreferenceSlider';
+import TransportCard from './components/TransportCard';
+import RecommendationBanner from './components/RecommendationBanner';
+import { LocationIcon, SpinnerIcon } from './components/icons';
+
+const MapDisplay = dynamic(() => import('./components/MapDisplay'), { ssr: false });
+
+const MODES: TransportMode[] = ['walking', 'bicycling', 'driving', 'transit'];
+const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
+
+function metersToMiles(m: number) { return m * 0.000621371; }
 
 export default function Home() {
+  const [mapsReady, setMapsReady] = useState(false);
+  const [originText, setOriginText] = useState('');
+  const [destText, setDestText] = useState('');
+  const [originLatLng, setOriginLatLng] = useState<LatLng | null>(null);
+  const [destLatLng, setDestLatLng] = useState<LatLng | null>(null);
+  const [originShortName, setOriginShortName] = useState('');
+  const [sliderValue, setSliderValue] = useState(1.5);
+  const [weather, setWeather] = useState<WeatherData | null>(null);
+  const [weatherLoading, setWeatherLoading] = useState(false);
+  const [scores, setScores] = useState<TransportScore[]>([]);
+  const [selectedMode, setSelectedMode] = useState<TransportMode | null>(null);
+  const [allGmRoutes, setAllGmRoutes] = useState<Record<TransportMode, google.maps.DirectionsResult | null>>({
+    walking: null, bicycling: null, driving: null, transit: null,
+  });
+  const [routeResults, setRouteResults] = useState<Record<TransportMode, RouteResult | null>>({
+    walking: null, bicycling: null, driving: null, transit: null,
+  });
+  const [loadingLocation, setLoadingLocation] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const originInputRef = useRef<HTMLInputElement>(null);
+  const destInputRef = useRef<HTMLInputElement>(null);
+
+  const fetchWeather = useCallback(async (loc: LatLng) => {
+    setWeatherLoading(true);
+    try {
+      const res = await fetch(`/api/weather?lat=${loc.lat}&lng=${loc.lng}`);
+      if (!res.ok) throw new Error('Failed');
+      const data: WeatherData = await res.json();
+      setWeather(data);
+    } catch {
+      // Weather is best-effort
+    } finally {
+      setWeatherLoading(false);
+    }
+  }, []);
+
+  const initAutocomplete = useCallback(() => {
+    if (!originInputRef.current || !destInputRef.current) return;
+    if (typeof google === 'undefined' || !google.maps?.places) return;
+
+    const opts: google.maps.places.AutocompleteOptions = {
+      fields: ['geometry', 'formatted_address', 'name'],
+    };
+
+    const originAC = new google.maps.places.Autocomplete(originInputRef.current, opts);
+    const destAC = new google.maps.places.Autocomplete(destInputRef.current, opts);
+
+    originAC.addListener('place_changed', () => {
+      const place = originAC.getPlace();
+      if (place.geometry?.location) {
+        const loc = { lat: place.geometry.location.lat(), lng: place.geometry.location.lng() };
+        const name = place.name || place.formatted_address || '';
+        setOriginLatLng(loc);
+        setOriginText(place.formatted_address || name);
+        setOriginShortName(name.split(',')[0]);
+        fetchWeather(loc);
+      }
+    });
+
+    destAC.addListener('place_changed', () => {
+      const place = destAC.getPlace();
+      if (place.geometry?.location) {
+        setDestLatLng({ lat: place.geometry.location.lat(), lng: place.geometry.location.lng() });
+        setDestText(place.formatted_address || place.name || '');
+      }
+    });
+
+    setMapsReady(true);
+  }, [fetchWeather]);
+
+  const detectLocation = useCallback(() => {
+    if (!navigator.geolocation) { setError('Geolocation not available'); return; }
+    setLoadingLocation(true);
+    setError(null);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setOriginLatLng(loc);
+        fetchWeather(loc);
+
+        if (typeof google !== 'undefined' && google.maps) {
+          new google.maps.Geocoder().geocode({ location: loc }, (results, status) => {
+            const addr = status === 'OK' && results?.[0]?.formatted_address
+              ? results[0].formatted_address
+              : `${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`;
+            setOriginText(addr);
+            setOriginShortName(addr.split(',')[0]);
+            if (originInputRef.current) originInputRef.current.value = addr;
+          });
+        }
+        setLoadingLocation(false);
+      },
+      (err) => { setLoadingLocation(false); setError(`Location error: ${err.message}`); },
+      { timeout: 10000 }
+    );
+  }, [fetchWeather]);
+
+  // Parse Google DirectionsResult → RouteResult
+  const handleRoutesLoaded = useCallback(
+    (gmRoutes: Record<TransportMode, google.maps.DirectionsResult | null>) => {
+      setAllGmRoutes(gmRoutes);
+      const parsed: Record<TransportMode, RouteResult | null> = {
+        walking: null, bicycling: null, driving: null, transit: null,
+      };
+      MODES.forEach((mode) => {
+        const res = gmRoutes[mode];
+        if (!res?.routes[0]?.legs[0]) return;
+        const leg = res.routes[0].legs[0];
+        parsed[mode] = {
+          mode,
+          durationSeconds: leg.duration?.value ?? 0,
+          distanceMeters: leg.distance?.value ?? 0,
+          durationText: leg.duration?.text ?? '',
+          distanceText: leg.distance?.text ?? '',
+          distanceMiles: metersToMiles(leg.distance?.value ?? 0),
+          polyline: res.routes[0].overview_polyline,
+        };
+      });
+      setRouteResults(parsed);
+    },
+    []
+  );
+
+  // Score computation
+  useEffect(() => {
+    if (!weather || !Object.values(routeResults).some(Boolean)) return;
+    const computed = scoreTransportModes(routeResults, weather, sliderValue);
+    setScores(computed);
+  }, [routeResults, weather, sliderValue]);
+
+  // Auto-select winner when scores change
+  useEffect(() => {
+    if (scores.length > 0 && scores[0].route) {
+      setSelectedMode(scores[0].mode);
+    }
+  }, [scores]);
+
+  const winner = scores[0] ?? null;
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <>
+      {/* Maps callback shim — must run before the Maps script */}
+      <Script id="maps-shim" strategy="beforeInteractive">{`window.__initMaps=function(){};`}</Script>
+      <Script
+        id="google-maps"
+        strategy="afterInteractive"
+        src={`https://maps.googleapis.com/maps/api/js?key=${API_KEY}&libraries=places&callback=__initMaps`}
+        onLoad={() => {
+          (window as unknown as Record<string, () => void>).__initMaps = initAutocomplete;
+          if (typeof google !== 'undefined' && google.maps?.places) initAutocomplete();
+        }}
+      />
+
+      <div className="min-h-screen bg-[#f8f9fb] flex flex-col">
+
+        {/* ── Fixed top input bar ─────────────────────────────────── */}
+        <header className="sticky top-0 z-50 bg-white border-b border-gray-200 shadow-sm">
+          <div className="max-w-5xl mx-auto px-4 py-3">
+            {/* Brand row */}
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-xl">🗺️</span>
+              <h1 className="text-base font-black text-gray-900 tracking-tight">HowShouldIGo</h1>
+              <span className="text-xs text-gray-400 ml-1 hidden sm:inline">Smart transport recommendations</span>
+            </div>
+
+            {/* Input row */}
+            <div className="grid sm:grid-cols-2 gap-2">
+              {/* From */}
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-gray-400 uppercase tracking-wide pointer-events-none">
+                  From
+                </span>
+                <input
+                  ref={originInputRef}
+                  type="text"
+                  placeholder="Current location or address"
+                  onChange={(e) => setOriginText(e.target.value)}
+                  className="w-full pl-14 pr-10 py-2.5 rounded-xl border border-gray-200 bg-gray-50 text-gray-900 text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:bg-white transition-all"
+                />
+                <button
+                  onClick={detectLocation}
+                  disabled={loadingLocation}
+                  title="Use my current location"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-blue-500 disabled:opacity-40 transition-colors"
+                >
+                  {loadingLocation
+                    ? <SpinnerIcon size={18} className="text-blue-400" />
+                    : <LocationIcon size={18} />
+                  }
+                </button>
+              </div>
+
+              {/* To */}
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-gray-400 uppercase tracking-wide pointer-events-none">
+                  To
+                </span>
+                <input
+                  ref={destInputRef}
+                  type="text"
+                  placeholder="Enter destination"
+                  onChange={(e) => setDestText(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-gray-200 bg-gray-50 text-gray-900 text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:bg-white transition-all"
+                />
+              </div>
+            </div>
+
+            {/* Preference slider */}
+            <div className="mt-3">
+              <PreferenceSlider value={sliderValue} onChange={setSliderValue} />
+            </div>
+
+            {/* Weather */}
+            <div className="mt-2.5 min-h-[24px]">
+              <WeatherDisplay weather={weather} loading={weatherLoading} locationName={originShortName} />
+            </div>
+
+            {error && (
+              <div className="mt-2 text-sm text-red-500 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+                ⚠️ {error}
+              </div>
+            )}
+          </div>
+        </header>
+
+        {/* ── Map — large, 50%+ viewport ──────────────────────────── */}
+        <MapDisplay
+          origin={originLatLng}
+          destination={destLatLng}
+          selectedMode={selectedMode}
+          onRoutesLoaded={handleRoutesLoaded}
+          allRoutes={allGmRoutes}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+
+        {/* ── Content below map ───────────────────────────────────── */}
+        <div className="max-w-5xl mx-auto w-full px-4 py-5 space-y-4 flex-1">
+
+          {/* Recommendation banner */}
+          <RecommendationBanner
+            winner={winner}
+            weather={weather}
+            originName={originShortName}
+            destName={destText.split(',')[0]}
+          />
+
+          {/* Comparison cards */}
+          {scores.length > 0 && (
+            <div>
+              <h2 className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-3">
+                All options compared
+              </h2>
+              {/* 4 columns on desktop, 2×2 on tablet, 1 column on mobile */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {scores.map((result, idx) => (
+                  <TransportCard
+                    key={result.mode}
+                    result={result}
+                    isWinner={idx === 0}
+                    isSelected={selectedMode === result.mode}
+                    onClick={() => setSelectedMode(result.mode)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* No-results empty state */}
+          {scores.length === 0 && (
+            <div className="text-center py-10 text-gray-400">
+              <p className="text-sm">Scores will appear once you enter a route</p>
+            </div>
+          )}
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+
+        {/* Footer */}
+        <footer className="text-center py-6 text-xs text-gray-300 border-t border-gray-100">
+          Weather by{' '}
+          <a href="https://open-meteo.com" className="underline hover:text-gray-500">Open-Meteo</a>
+          {' · '}Routes by Google Maps{' · '}No data stored
+        </footer>
+      </div>
+    </>
   );
 }

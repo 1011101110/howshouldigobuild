@@ -1,26 +1,66 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: #f8f9fb;
+  color: #111827;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Google Places Autocomplete — light theme */
+.pac-container {
+  background: #fff !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 10px !important;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important;
+  margin-top: 4px !important;
+  z-index: 10000 !important;
+  overflow: hidden !important;
+}
+.pac-item {
+  background: #fff !important;
+  color: #374151 !important;
+  border-top: 1px solid #f3f4f6 !important;
+  padding: 10px 14px !important;
+  cursor: pointer !important;
+  font-size: 14px !important;
+}
+.pac-item:hover, .pac-item-selected {
+  background: #f0f4ff !important;
+}
+.pac-item-query {
+  color: #1d4ed8 !important;
+  font-weight: 600 !important;
+}
+.pac-matched {
+  color: #2563eb !important;
+  font-weight: 700 !important;
+}
+.pac-icon { display: none !important; }
+
+/* Score bar animation */
+@keyframes growBar {
+  from { width: 0; }
+  to { width: var(--bar-width); }
+}
+.score-bar {
+  animation: growBar 0.5s cubic-bezier(0.4,0,0.2,1) forwards;
+}
+
+/* Map container */
+#map-container {
+  min-height: 55vh;
+}
+
+/* Recommendation banner gradient pulse on load */
+@keyframes bannerIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.banner-in {
+  animation: bannerIn 0.35s ease-out;
 }
